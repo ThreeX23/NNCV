@@ -1,0 +1,18 @@
+FATAL:   While checking container encryption: could not open image /gpfs/home3/scur1338/NNCV/Final assignment/container.sif: failed to retrieve path for /gpfs/home3/scur1338/NNCV/Final assignment/container.sif: lstat /gpfs/home3/scur1338/NNCV/Final assignment/container.sif: no such file or directory
+srun: error: gcn66: task 0: Exited with exit code 255
+srun: Terminating StepId=10445639.0
+
+JOB STATISTICS
+==============
+Job ID: 10445639
+Cluster: snellius
+User/Group: scur1338/scur1338
+State: RUNNING
+Nodes: 1
+Cores per node: 18
+CPU Utilized: 00:00:00
+CPU Efficiency: 0.00% of 00:03:18 core-walltime
+Job Wall-clock time: 00:00:11
+Memory Utilized: 0.00 MB (estimated maximum)
+Memory Efficiency: 0.00% of 120.00 GB (120.00 GB/node)
+WARNING: Efficiency statistics may be misleading for RUNNING jobs.
