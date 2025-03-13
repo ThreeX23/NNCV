@@ -7,7 +7,7 @@ def preprocess(img):
     input is a PIL image.
     Output image should be pytorch tensor that is compatible with your model"""
 
-    img = transforms.functional.resize(img, size=(512, 512), interpolation=transforms.InterpolationMode.LANCZOS)
+    img = transforms.functional.resize(img, size=(256, 256), interpolation=transforms.InterpolationMode.LANCZOS)
     trans = transforms.Compose([transforms.ToTensor()])
     img = trans(img)
     img = img.unsqueeze(0)
