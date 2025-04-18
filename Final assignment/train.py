@@ -19,18 +19,22 @@ import wandb
 import torch
 import torch.nn as nn
 from torch.optim import AdamW
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, ConcatDataset
 from torchvision.datasets import Cityscapes, wrap_dataset_for_transforms_v2
 from torchvision.utils import make_grid
 from torchvision.transforms.v2 import (
     Compose,
-    Normalize,
-    Resize,
     ToImage,
+    RandomResizedCrop,
+    RandomHorizontalFlip,
+    RandomRotation,
+    ColorJitter,
     ToDtype,
+    Normalize,
+    Resize
 )
 
-from unet import UNet
+from model import Model
 
 
 # Mapping class IDs to train IDs
@@ -68,6 +72,39 @@ def get_args_parser():
 
     return parser
 
+def DiceLoss(preds, targets, smooth=1e-6, ignore_index=255, n_classes=19):
+        preds = preds.softmax(1).argmax(1)
+        preds = preds.unsqueeze(1)
+        targets = targets.unsqueeze(1)
+
+        dice = []
+        for class_id in range(n_classes):
+            if class_id == ignore_index:
+                continue
+            
+            pred_mask = preds == class_id
+            target_mask = targets == class_id
+            
+            intersection = (pred_mask & target_mask).sum().float()
+            union = pred_mask.sum().float() + target_mask.sum().float()
+            
+            if union > 0:
+                dice.append((2.*intersection)/union)
+            
+        return 1 - torch.mean(torch.stack(dice))
+        
+class PolyLR(torch.optim.lr_scheduler._LRScheduler):
+    def __init__(self, optimizer, max_iter, power=0.9, last_epoch=-1):
+        self.max_iter = max_iter
+        self.power = power
+        super(PolyLR, self).__init__(optimizer, last_epoch)
+
+    def get_lr(self):
+        return [
+            base_lr * (1 - self.last_epoch / self.max_iter) ** self.power
+            for base_lr in self.base_lrs
+        ]
+
 
 def main(args):
     # Initialize wandb for logging
@@ -97,6 +134,17 @@ def main(args):
         ToDtype(torch.float32, scale=True),
         Normalize((0.5,), (0.5,)),
     ])
+    
+    augmented_transform = Compose([
+        ToImage(),  
+        Resize((256, 256)),
+        RandomHorizontalFlip(p=0.5),
+        RandomRotation(degrees=5),
+        ColorJitter(brightness=0.3, contrast=0.3, saturation=0.2, hue=0.05),
+        Resize((256, 256)),
+        ToDtype(torch.float32, scale=True),
+        Normalize((0.5,), (0.5,)),
+    ])
 
     # Load the dataset and make a split for training and validation
     train_dataset = Cityscapes(
@@ -105,6 +153,13 @@ def main(args):
         mode="fine", 
         target_type="semantic", 
         transforms=transform
+    )
+    augmented_train_dataset = Cityscapes(
+        args.data_dir, 
+        split="train", 
+        mode="fine", 
+        target_type="semantic", 
+        transforms=augmented_transform
     )
     valid_dataset = Cityscapes(
         args.data_dir, 
@@ -115,8 +170,11 @@ def main(args):
     )
 
     train_dataset = wrap_dataset_for_transforms_v2(train_dataset)
+    aug_train_dataset = wrap_dataset_for_transforms_v2(augmented_train_dataset)
     valid_dataset = wrap_dataset_for_transforms_v2(valid_dataset)
-
+    
+    train_dataset = ConcatDataset([train_dataset, aug_train_dataset])
+    
     train_dataloader = DataLoader(
         train_dataset, 
         batch_size=args.batch_size, 
@@ -131,7 +189,7 @@ def main(args):
     )
 
     # Define the model
-    model = UNet(
+    model = Model(
         in_channels=3,  # RGB images
         n_classes=19,  # 19 classes in the Cityscapes dataset
     ).to(device)
@@ -140,11 +198,16 @@ def main(args):
     criterion = nn.CrossEntropyLoss(ignore_index=255)  # Ignore the void class
 
     # Define the optimizer
-    optimizer = AdamW(model.parameters(), lr=args.lr)
+    optimizer = AdamW(model.parameters(), lr=args.lr, weight_decay = 1e-4)
+    #optimizer = torch.optim.SGD(model.parameters(), lr = args.lr ,momentum = 0.9, weight_decay=4e-5)
+    #scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 30, 0.1)
+    #scheduler = PolyLR(optimizer, max_iter=args.epochs)
 
     # Training loop
     best_valid_loss = float('inf')
+    best_valid_dice = float('inf')
     current_best_model_path = None
+    current_best_dice_path = None
     for epoch in range(args.epochs):
         print(f"Epoch {epoch+1:04}/{args.epochs:04}")
 
@@ -159,20 +222,24 @@ def main(args):
 
             optimizer.zero_grad()
             outputs = model(images)
-            loss = criterion(outputs, labels)
+            loss = 0.5*criterion(outputs, labels) + 0.5*DiceLoss(outputs, labels)
+            diceloss = DiceLoss(outputs, labels)
             loss.backward()
             optimizer.step()
 
             wandb.log({
                 "train_loss": loss.item(),
+                "train_dice": diceloss.item(),
+                "train_mds": 1-diceloss.item(),
                 "learning_rate": optimizer.param_groups[0]['lr'],
                 "epoch": epoch + 1,
             }, step=epoch * len(train_dataloader) + i)
-            
+        #scheduler.step()
         # Validation
         model.eval()
         with torch.no_grad():
             losses = []
+            dices = []
             for i, (images, labels) in enumerate(valid_dataloader):
 
                 labels = convert_to_train_id(labels)  # Convert class IDs to train IDs
@@ -181,8 +248,11 @@ def main(args):
                 labels = labels.long().squeeze(1)  # Remove channel dimension
 
                 outputs = model(images)
-                loss = criterion(outputs, labels)
+                loss = 0.5*criterion(outputs, labels) + 0.5*DiceLoss(outputs, labels)
+                diceloss = DiceLoss(outputs, labels)
                 losses.append(loss.item())
+                dices.append(diceloss.item())
+                diceloss = DiceLoss(outputs, labels)
             
                 if i == 0:
                     predictions = outputs.softmax(1).argmax(1)
@@ -205,8 +275,11 @@ def main(args):
                     }, step=(epoch + 1) * len(train_dataloader) - 1)
             
             valid_loss = sum(losses) / len(losses)
+            valid_dice = sum(dices) / len(dices)
             wandb.log({
-                "valid_loss": valid_loss
+                "valid_loss": valid_loss,
+                "valid_dice": valid_dice,
+                "valid_mds": 1-valid_dice,
             }, step=(epoch + 1) * len(train_dataloader) - 1)
 
             if valid_loss < best_valid_loss:
@@ -218,6 +291,15 @@ def main(args):
                     f"best_model-epoch={epoch:04}-val_loss={valid_loss:04}.pth"
                 )
                 torch.save(model.state_dict(), current_best_model_path)
+            if valid_dice < best_valid_dice:
+                best_valid_dice = valid_dice
+                if current_best_dice_path:
+                    os.remove(current_best_dice_path)
+                current_best_dice_path = os.path.join(
+                    output_dir, 
+                    f"best_dice-epoch={epoch:04}-dice_loss={valid_dice:04}.pth"
+                )
+                torch.save(model.state_dict(), current_best_dice_path)
         
     print("Training complete!")
 
