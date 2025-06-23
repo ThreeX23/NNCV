@@ -1,6 +1,6 @@
 The models are placed in the models map.
 The model paths are placed in the checkpoints map.
-The mapnames inside the checkpointss map is equal to the models in the models map.
+Inside the checkpoints folder, each model and their variants are stuffed in another folder, for organizational purposes.
 
 The codes have not been altered to run on their own, they have kept the same formatting as was meant for the project.
 
@@ -11,3 +11,5 @@ The data has not been put on the repository due to the sheer size of the file.
 My codalab username Dennis200: mail: d.a.d.hollander@student.tue.nl
 
 Inside datacenter.py the models are evaluated.
+
+Inside Checkpoints folder, each model and their variants are stuffed in another folder, for organizational purposes
