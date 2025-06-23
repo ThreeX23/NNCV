@@ -8,7 +8,7 @@ To run the code:
 Paste the required model from the models map into the model.py file. Attach the path to the model, do not train the models, just evaluate.
 The data has not been put on the repository due to the sheer size of the file. 
 
-My codalab username Dennis200: mail: d.a.d.hollander@student.tue.nl
+My codalab username Dennis2000: mail: d.a.d.hollander@student.tue.nl
 
 Inside datacenter.py the models are evaluated.
 
